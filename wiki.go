@@ -2,60 +2,73 @@ package main
 
 import (
 	"html/template"
+	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"regexp"
+	"strings"
 )
 
 type Page struct {
 	Title string
-	Body  []byte
+	Body  string
 }
 
-func (p *Page) save() error {
-	filename := p.Title + ".txt"
-	return os.WriteFile(filename, p.Body, 0600)
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "login", nil)
 }
 
-func loadPage(title string) (*Page, error) {
-	filename := title + ".txt"
-	body, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	return &Page{Title: title, Body: body}, nil
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "register", nil)
 }
 
-func viewHandler(w http.ResponseWriter, r *http.Request, title string) {
-	p, err := loadPage(title)
-	if err != nil {
-		http.Redirect(w, r, "/edit/"+title, http.StatusFound)
+func saveHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
 		return
 	}
-	renderTemplate(w, "view", p)
-}
-
-func editHandler(w http.ResponseWriter, r *http.Request, title string) {
-	p, err := loadPage(title)
-	if err != nil {
-		p = &Page{Title: title}
-	}
-	renderTemplate(w, "edit", p)
-}
-
-func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
-	body := r.FormValue("body")
-	p := &Page{Title: title, Body: []byte(body)}
-	err := p.save()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+	if username == "" || password == "" {
+		http.Error(w, "Username and password are required.", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/view/"+title, http.StatusFound)
+	userData := username + ";" + password + "\n"
+	err := ioutil.WriteFile("users.txt", []byte(userData), 0644)
+	if err != nil {
+		http.Error(w, "Failed to save user data.", http.StatusInternalServerError)
+		return
+	}
+	w.Write([]byte("User saved successfully."))
 }
 
-var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
+func validateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
+		return
+	}
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+	if username == "" || password == "" {
+		http.Error(w, "Username and password are required.", http.StatusBadRequest)
+		return
+	}
+	data, err := ioutil.ReadFile("users.txt")
+	if err != nil {
+		http.Error(w, "Failed to read user data.", http.StatusInternalServerError)
+		return
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Split(line, ";")
+		if fields[0] == username && fields[1] == password {
+			w.Write([]byte("Valid user."))
+			return
+		}
+	}
+	http.Error(w, "Invalid username or password.", http.StatusUnauthorized)
+}
+
+var templates = template.Must(template.ParseFiles("login.html", "register.html"))
 
 func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
 	err := templates.ExecuteTemplate(w, tmpl+".html", p)
@@ -64,22 +77,11 @@ func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
 	}
 }
 
-var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
-func makeHandler(fn func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		m := validPath.FindStringSubmatch(r.URL.Path)
-		if m == nil {
-			http.NotFound(w, r)
-			return
-		}
-		fn(w, r, m[2])
-	}
-}
-
 func main() {
-	http.HandleFunc("/view/", makeHandler(viewHandler))
-	http.HandleFunc("/edit/", makeHandler(editHandler))
-	http.HandleFunc("/save/", makeHandler(saveHandler))
+	http.HandleFunc("/login", loginHandler)
+	http.HandleFunc("/register", registerHandler)
+	http.HandleFunc("/save", saveHandler)
+	http.HandleFunc("/validate", validateHandler)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
